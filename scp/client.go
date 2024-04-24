@@ -312,9 +312,6 @@ func (a *Client) CopyFromRemote(ctx context.Context, file *os.File, remotePath s
 	return a.CopyFromRemotePassThru(ctx, file, remotePath, nil)
 }
 
-// CopyFromRemotePassThru copies a file from the remote to the given writer. The passThru parameter can be used
-// to keep track of progress and how many bytes that were download from the remote.
-// `passThru` can be set to nil to disable this behaviour.
 func (a *Client) CopyFromRemotePassThru(
 	ctx context.Context,
 	w io.Writer,
@@ -374,6 +371,28 @@ func (a *Client) CopyFromRemotePassThru(
 		}
 		if res.IsFailure() {
 			errCh <- errors.New(res.GetMessage())
+			return
+		}
+		if res.NoStandardProtocolType() {
+			errCh <- errors.New(fmt.Sprintf("Input from server doesn't follow protocol: %s", res.GetMessage()))
+			return
+		}
+
+		if res.IsTime() {
+			res, err = ParseResponse(r)
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			if res.IsFailure() || res.NoStandardProtocolType() {
+				errCh <- errors.New(res.GetMessage())
+				return
+			}
+		}
+
+		if !res.IsChmod() {
+			errCh <- errors.New(fmt.Sprintf("The data did not contain the expected CHMOD information: %s", res.GetMessage()))
 			return
 		}
 

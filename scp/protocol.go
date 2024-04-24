@@ -9,7 +9,6 @@ package scp
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -57,8 +56,9 @@ func ParseResponse(reader io.Reader) (Response, error) {
 	}
 
 	responseType := buffer[0]
+	runeResponseType := rune(buffer[0])
 	message := ""
-	if responseType > 0 {
+	if responseType > 0 && (runeResponseType == Chmod || runeResponseType == Time) {
 		bufferedReader := bufio.NewReader(reader)
 		message, err = bufferedReader.ReadString('\n')
 		if err != nil {
@@ -67,7 +67,7 @@ func ParseResponse(reader io.Reader) (Response, error) {
 	}
 
 	if len(message) > 0 {
-		return Response{responseType, message, rune(message[0])}, nil
+		return Response{responseType, message, runeResponseType}, nil
 	}
 
 	return Response{responseType, message, ' '}, nil
@@ -161,13 +161,10 @@ func (r *Response) ParseFileInfos() (*FileInfos, error) {
 func (r *Response) ParseFileTime() (*FileInfos, error) {
 	message := strings.ReplaceAll(r.Message, "\n", "")
 	parts := strings.Split(message, " ")
-	fmt.Println(message)
 	if len(parts) < 3 {
 		return nil, errors.New("unable to parse Time protocol")
 	}
 
-	fmt.Println(message)
-	// Many issues could arise substringing like this
 	aTime, err := strconv.Atoi(string(parts[0][1:10]))
 	if err != nil {
 		return nil, errors.New("unable to parse ATime component of message")
