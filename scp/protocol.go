@@ -58,7 +58,7 @@ func ParseResponse(reader io.Reader) (Response, error) {
 	responseType := buffer[0]
 	runeResponseType := rune(buffer[0])
 	message := ""
-	if responseType > 0 && (runeResponseType == Chmod || runeResponseType == Time) {
+	if responseType > 0 {
 		bufferedReader := bufio.NewReader(reader)
 		message, err = bufferedReader.ReadString('\n')
 		if err != nil {
@@ -117,6 +117,10 @@ type FileInfos struct {
 	Mtime       int64
 }
 
+func NewFileInfos() *FileInfos {
+	return &FileInfos{}
+}
+
 func (fileInfos *FileInfos) Update(new *FileInfos) {
 	if new == nil {
 		return
@@ -165,7 +169,7 @@ func (r *Response) ParseFileTime() (*FileInfos, error) {
 		return nil, errors.New("unable to parse Time protocol")
 	}
 
-	aTime, err := strconv.Atoi(string(parts[0][1:10]))
+	aTime, err := strconv.Atoi(string(parts[0][0:10]))
 	if err != nil {
 		return nil, errors.New("unable to parse ATime component of message")
 	}

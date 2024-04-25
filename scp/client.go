@@ -352,7 +352,7 @@ func (a *Client) CopyFromRemotePassThru(
 		}
 		defer in.Close()
 
-		err = session.Start(fmt.Sprintf("%s -f %q", a.RemoteBinary, remotePath))
+		err = session.Start(fmt.Sprintf("%s -pf %q", a.RemoteBinary, remotePath))
 		if err != nil {
 			errCh <- err
 			return
@@ -364,11 +364,14 @@ func (a *Client) CopyFromRemotePassThru(
 			return
 		}
 
+		fmt.Println("Works until here")
+
 		res, err := ParseResponse(r)
 		if err != nil {
 			errCh <- err
 			return
 		}
+
 		if res.IsFailure() {
 			errCh <- errors.New(res.GetMessage())
 			return
@@ -378,25 +381,53 @@ func (a *Client) CopyFromRemotePassThru(
 			return
 		}
 
+		fileInfo := NewFileInfos()
+
 		if res.IsTime() {
+			timeInfo, err := res.ParseFileTime()
+
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			fileInfo.Update(timeInfo)
+
+			err = Ack(in)
+			if err != nil {
+				errCh <- err
+				return
+			}
+
 			res, err = ParseResponse(r)
 			if err != nil {
 				errCh <- err
 				return
 			}
 
-			if res.IsFailure() || res.NoStandardProtocolType() {
+			if res.IsFailure() {
 				errCh <- errors.New(res.GetMessage())
+				return
+			}
+
+			if res.NoStandardProtocolType() {
+				errCh <- errors.New(fmt.Sprintf("Input from server doesn't follow protocol: %s", res.GetMessage()))
 				return
 			}
 		}
 
+		// The CHMOD message always comes before the actual data is being sent
 		if !res.IsChmod() {
 			errCh <- errors.New(fmt.Sprintf("The data did not contain the expected CHMOD information: %s", res.GetMessage()))
 			return
 		}
 
 		infos, err := res.ParseFileInfos()
+
+		fileInfo.Update(infos)
+
+		fmt.Println(fileInfo)
+
 		if err != nil {
 			errCh <- err
 			return
@@ -661,7 +692,7 @@ func (a *Client) CopyFromRemotePreserveProgressPassThru(
 		}
 		defer in.Close()
 
-		err = session.Start(fmt.Sprintf("%s -f -p %q", a.RemoteBinary, remotePath))
+		err = session.Start(fmt.Sprintf("%s -f %q", a.RemoteBinary, remotePath))
 		if err != nil {
 			errCh <- err
 			return
