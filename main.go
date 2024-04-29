@@ -19,10 +19,7 @@ func main() {
 		ssh.InsecureIgnoreHostKey(),
 	)
 
-	// For other authentication methods see ssh.ClientConfig and ssh.AuthMethod
-
-	// Create a new SCP client
-	client := scp.NewClient("localhost:2022", &clientConfig)
+	client := scp.NewConfigurer("localhost:2022", &clientConfig).Preserve(true).Create()
 
 	// Connect to the remote server
 	err := client.Connect()
@@ -31,7 +28,7 @@ func main() {
 	}
 
 	// Open a file
-	f, _ := os.OpenFile("./hello.txt", os.O_RDWR|os.O_CREATE, 0777)
+	f, _ := os.OpenFile("./hello.txt", os.O_CREATE, 0644)
 
 	// Close client connection after the file has been copied
 	defer client.Close()
@@ -39,18 +36,28 @@ func main() {
 	// Close the file after it has been copied
 	defer f.Close()
 
-	// Finally, copy the file over
-	// Usage: CopyFromFile(context, file, remotePath, permission)
-
-	// the context can be adjusted to provide time-outs or inherit from other contexts if this is embedded in a larger application.
-	err = client.CopyFromRemotePreserveProgressPassThru(
-		context.Background(),
-		f,
-		"hello.txt",
-		nil,
-	)
+	fileInfos, err := client.CopyFromRemoteFileInfos(context.Background(), f, "hello.txt", nil)
 
 	if err != nil {
 		fmt.Println("Error while copying file ", err)
+		return
 	}
+
+	fmt.Println(fileInfos)
+
+	fileStat, err := os.Stat("./hello.txt")
+	if err != nil {
+		fmt.Println("Error while getting file stat ", err)
+	}
+
+	if err != nil {
+		fmt.Println("Error while getting file stat ", err)
+	}
+
+	if fileStat.Size() != fileInfos.Size {
+		fmt.Println("File size does not match")
+	}
+
+	fmt.Println(fileInfos.Permissions)
+
 }

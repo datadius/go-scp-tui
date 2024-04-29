@@ -9,16 +9,14 @@ package scp
 import (
 	"bytes"
 	"context"
-	//"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 	"path"
 	"sync"
 	"time"
 
-	//"github.com/charmbracelet/bubbles/progress"
-	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -65,6 +63,9 @@ type Client struct {
 	// Handler called when calling `Close` to clean up any remaining
 	// resources managed by `Client`.
 	closeHandler ICloseHandler
+
+	// Preserve the remote file permissions, modification time and access time
+	preserve bool
 }
 
 // Connect connects to the remote SSH server, returns error if it couldn't establish a session to the SSH server.
@@ -132,7 +133,7 @@ func (a *Client) CopyFilePassThru(
 	permissions string,
 	passThru PassThru,
 ) error {
-	contentsBytes, err := io.ReadAll(fileReader)
+	contentsBytes, err := ioutil.ReadAll(fileReader)
 	if err != nil {
 		return fmt.Errorf("failed to read all data from reader: %w", err)
 	}
@@ -317,14 +318,28 @@ func (a *Client) CopyFromRemotePassThru(
 	remotePath string,
 	passThru PassThru,
 ) error {
+	_, err := a.CopyFromRemoteFileInfos(ctx, w, remotePath, passThru)
+
+	return err
+}
+
+// CopyFroRemoteFileInfos copies a file from the remote to a given writer and return a FileInfos struct
+// containing information about the file such as permissions, the file size, modification time and access time
+func (a *Client) CopyFromRemoteFileInfos(
+	ctx context.Context,
+	w io.Writer,
+	remotePath string,
+	passThru PassThru,
+) (*FileInfos, error) {
 	session, err := a.sshClient.NewSession()
 	if err != nil {
-		return fmt.Errorf("Error creating ssh session in copy from remote: %v", err)
+		return nil, fmt.Errorf("Error creating ssh session in copy from remote: %v", err)
 	}
 	defer session.Close()
 
 	wg := sync.WaitGroup{}
 	errCh := make(chan error, 4)
+	fileInfosCh := make(chan *FileInfos, 1)
 
 	wg.Add(1)
 	go func() {
@@ -351,7 +366,11 @@ func (a *Client) CopyFromRemotePassThru(
 		}
 		defer in.Close()
 
-		err = session.Start(fmt.Sprintf("%s -f %q", a.RemoteBinary, remotePath))
+		if a.preserve {
+			err = session.Start(fmt.Sprintf("%s -pf %q", a.RemoteBinary, remotePath))
+		} else {
+			err = session.Start(fmt.Sprintf("%s -f %q", a.RemoteBinary, remotePath))
+		}
 		if err != nil {
 			errCh <- err
 			return
@@ -363,10 +382,17 @@ func (a *Client) CopyFromRemotePassThru(
 			return
 		}
 
+		fmt.Println("Stop 1")
 		fileInfo, err := ParseResponse(r, in)
 		if err != nil {
+			fileInfosCh <- nil
 			errCh <- err
 			return
+		}
+
+		fmt.Println("Stop 2")
+		if fileInfo != nil {
+			fileInfosCh <- fileInfo
 		}
 
 		err = Ack(in)
@@ -405,346 +431,14 @@ func (a *Client) CopyFromRemotePassThru(
 	}
 
 	if err := wait(&wg, ctx); err != nil {
-		return err
+		return nil, err
 	}
+
 	finalErr := <-errCh
+	fileInfos := <-fileInfosCh
 	close(errCh)
-	return finalErr
+	return fileInfos, finalErr
 }
-
-var p *tea.Program
-
-type progressWriter struct {
-	total      int64
-	downloaded int
-	file       io.Writer
-	reader     io.Reader
-	onProgress func(float64)
-}
-
-func (pw *progressWriter) Start() error {
-	_, err := CopyN(pw.file, io.TeeReader(pw.reader, pw), pw.total)
-	//var total int64
-	//total = 0
-	//for total < pw.total {
-	//	n, err := CopyN(pw.file, pw.reader, pw.total)
-	//	pw.downloaded += n
-	//	if pw.total > 0 && pw.onProgress != nil {
-	//		pw.onProgress(float64(pw.downloaded) / float64(pw.total))
-	//	}
-	//	if err != nil {
-	//		fmt.Println(err)
-	//		p.Send(progressErrMsg{err})
-	//	}
-	//	total += n
-	//}
-
-	//_, err := CopyN(pw.file, pw.reader, pw.total)
-	if err != nil {
-		p.Send(progressErrMsg{err})
-	}
-	return err
-}
-
-func (pw *progressWriter) Write(p []byte) (int, error) {
-	pw.downloaded += len(p)
-	if pw.total > 0 && pw.onProgress != nil {
-		pw.onProgress(float64(pw.downloaded) / float64(pw.total))
-	}
-	return len(p), nil
-}
-
-//func (a *Client) CopyFromRemoteProgressPassThru(
-//	ctx context.Context,
-//	w io.Writer,
-//	remotePath string,
-//	passThru PassThru,
-//) error {
-//	session, err := a.sshClient.NewSession()
-//	if err != nil {
-//		return fmt.Errorf("Error creating ssh session in copy from remote: %v", err)
-//	}
-//	defer session.Close()
-//
-//	wg := sync.WaitGroup{}
-//	errCh := make(chan error, 4)
-//
-//	wg.Add(1)
-//	go func() {
-//		var err error
-//
-//		defer func() {
-//			// NOTE: this might send an already sent error another time, but since we only receive opne, this is fine. On the "happy-path" of this function, the error will be `nil` therefore completing the "err<-errCh" at the bottom of the function.
-//			errCh <- err
-//			// We must unblock the go routine first as we block on reading the channel later
-//			wg.Done()
-//
-//		}()
-//
-//		r, err := session.StdoutPipe()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		in, err := session.StdinPipe()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//		defer in.Close()
-//
-//		err = session.Start(fmt.Sprintf("%s -f %q", a.RemoteBinary, remotePath))
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		err = Ack(in)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		res, err := ParseResponse(r)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//		if res.IsFailure() {
-//			errCh <- errors.New(res.GetMessage())
-//			return
-//		}
-//
-//		infos, err := res.ParseFileInfos()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		err = Ack(in)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		if passThru != nil {
-//			r = passThru(r, infos.Size)
-//		}
-//
-//		pw := &progressWriter{
-//			total:  infos.Size,
-//			file:   w,
-//			reader: r,
-//			onProgress: func(ratio float64) {
-//				p.Send(progressMsg(ratio))
-//			},
-//		}
-//
-//		m := model{
-//			pw:       pw,
-//			progress: progress.New(progress.WithDefaultGradient()),
-//		}
-//
-//		p = tea.NewProgram(m)
-//
-//		go pw.Start()
-//
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		err = Ack(in)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		if _, err := p.Run(); err != nil {
-//			fmt.Println("Error running progress: ", err)
-//			os.Exit(1)
-//		}
-//
-//		err = session.Wait()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//	}()
-//
-//	if a.Timeout > 0 {
-//		var cancel context.CancelFunc
-//		ctx, cancel = context.WithTimeout(ctx, a.Timeout)
-//		defer cancel()
-//	}
-//
-//	if err := wait(&wg, ctx); err != nil {
-//		return err
-//	}
-//	finalErr := <-errCh
-//	close(errCh)
-//	return finalErr
-//}
-
-//func (a *Client) CopyFromRemotePreserveProgressPassThru(
-//	ctx context.Context,
-//	w io.Writer,
-//	remotePath string,
-//	passThru PassThru,
-//) error {
-//	session, err := a.sshClient.NewSession()
-//	if err != nil {
-//		return fmt.Errorf("Error creating ssh session in copy from remote: %v", err)
-//	}
-//	defer session.Close()
-//
-//	wg := sync.WaitGroup{}
-//	errCh := make(chan error, 4)
-//
-//	wg.Add(1)
-//	go func() {
-//		var err error
-//
-//		defer func() {
-//			// NOTE: this might send an already sent error another time, but since we only receive opne, this is fine. On the "happy-path" of this function, the error will be `nil` therefore completing the "err<-errCh" at the bottom of the function.
-//			errCh <- err
-//			// We must unblock the go routine first as we block on reading the channel later
-//			wg.Done()
-//
-//		}()
-//
-//		r, err := session.StdoutPipe()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		in, err := session.StdinPipe()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//		defer in.Close()
-//
-//		err = session.Start(fmt.Sprintf("%s -f %q", a.RemoteBinary, remotePath))
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		err = Ack(in)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		res, err := ParseResponse(r)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//		if res.IsFailure() && res.NoStandardProtocolType() {
-//			errCh <- errors.New(res.GetMessage())
-//			return
-//		}
-//
-//		timeInfo, err := res.ParseFileTime()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		err = Ack(in)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		res, err = ParseResponse(r)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//		if res.IsFailure() && res.NoStandardProtocolType() {
-//			errCh <- errors.New(res.GetMessage())
-//			return
-//		}
-//
-//		infos, err := res.ParseFileInfos()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		err = Ack(in)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		infos.Update(timeInfo)
-//
-//		if passThru != nil {
-//			r = passThru(r, infos.Size)
-//		}
-//
-//		pw := &progressWriter{
-//			total:  infos.Size,
-//			file:   w,
-//			reader: r,
-//			onProgress: func(ratio float64) {
-//				p.Send(progressMsg(ratio))
-//			},
-//		}
-//
-//		m := model{
-//			pw:       pw,
-//			progress: progress.New(progress.WithDefaultGradient()),
-//		}
-//
-//		p = tea.NewProgram(m)
-//
-//		go pw.Start()
-//
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		err = Ack(in)
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//		if _, err := p.Run(); err != nil {
-//			fmt.Println("Error running progress: ", err)
-//			os.Exit(1)
-//		}
-//
-//		err = session.Wait()
-//		if err != nil {
-//			errCh <- err
-//			return
-//		}
-//
-//	}()
-//
-//	if a.Timeout > 0 {
-//		var cancel context.CancelFunc
-//		ctx, cancel = context.WithTimeout(ctx, a.Timeout)
-//		defer cancel()
-//	}
-//
-//	if err := wait(&wg, ctx); err != nil {
-//		return err
-//	}
-//	finalErr := <-errCh
-//	close(errCh)
-//	return finalErr
-//}
 
 func (a *Client) Close() {
 	a.closeHandler.Close()
