@@ -15,11 +15,11 @@ func main() {
 	// we ignore the host key in this example, please change this if you use this library
 	clientConfig, _ := auth.PasswordKey(
 		"claud",
-		"tiger",
+		"pass",
 		ssh.InsecureIgnoreHostKey(),
 	)
 
-	client := scp.NewConfigurer("localhost:2022", &clientConfig).Preserve(true).Create()
+	client := scp.NewConfigurer("localhost:22", &clientConfig).Preserve(true).Create()
 
 	// Connect to the remote server
 	err := client.Connect()
@@ -58,6 +58,11 @@ func main() {
 		fmt.Println("File size does not match")
 	}
 
-	fmt.Println(fileInfos.Permissions)
+	fileStat, _ = os.Stat("hello.txt")
+	fmt.Println(fileStat.Mode().Perm())
+	fmt.Println(os.FileMode(fileInfos.Permissions))
+	if fileStat.Mode().Perm() != os.FileMode(fileInfos.Permissions) {
+		fmt.Println("File permissions do not match")
+	}
 
 }
