@@ -19,7 +19,7 @@ func main() {
 		ssh.InsecureIgnoreHostKey(),
 	)
 
-	client := scp.NewConfigurer("localhost:22", &clientConfig).Preserve(true).Create()
+	client := scp.NewConfigurer("localhost:22", &clientConfig).Create()
 
 	// Connect to the remote server
 	err := client.Connect()
@@ -58,11 +58,17 @@ func main() {
 		fmt.Println("File size does not match")
 	}
 
-	fileStat, _ = os.Stat("hello.txt")
+	fileStat, _ = os.Stat("C:Users/claud/hello.txt")
 	fmt.Println(fileStat.Mode().Perm())
 	fmt.Println(os.FileMode(fileInfos.Permissions))
 	if fileStat.Mode().Perm() != os.FileMode(fileInfos.Permissions) {
 		fmt.Println("File permissions do not match")
+	}
+
+	if fileStat.ModTime().Unix() != fileInfos.Mtime {
+		fmt.Println(fileStat.ModTime().Local().Unix())
+		fmt.Println(fileInfos.Mtime)
+		fmt.Println("File modification time does not match")
 	}
 
 }
